@@ -28,7 +28,9 @@ jobs:
         run: |
           mkdir app
           unzip miapara_chanda_flutter_starter.zip -d app
-
+      - name: Fix intl dependency
+        run: |
+          sed -i 's/intl: \^0\.19\.0/intl: ^0.20.3/' app/pubspec.yaml
       - name: Create Android platform files
         run: |
           cd app
