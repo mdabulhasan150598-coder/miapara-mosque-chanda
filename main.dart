@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -72,7 +70,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _initDBAndLoad() async {
     final dbPath = await getDatabasesPath();
-    final path = p.join(dbPath, 'miapara_chanda_final_v1.db');
+    final path = p.join(dbPath, 'miapara_chanda_stable.db');
 
     _db = await openDatabase(
       path,
@@ -157,12 +155,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  // নামের ওপর ট্যাপ করলেই খাতা ওপেন হবে
+  // সদস্যের নামের উপর ট্যাপ করলেই তার খাতা ওপেন হবে
   void _openMemberPassbook(Map<String, dynamic> member) async {
     final mId = member['id'] as int;
     final rate = member['rate'] as int;
 
-    // ১২ মাসের পরিশোধ চার্ট
+    // ১২ মাসের পরিশোধ হিস্টোরি
     final yearRes = await _db!.rawQuery('''
       SELECT month, SUM(amount) as total 
       FROM collections 
@@ -216,7 +214,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             const SizedBox(height: 10),
 
-            // কোন মাস পর্যন্ত দেওয়া স্পষ্ট ব্যানার
+            // কোন মাস পর্যন্ত দেওয়া তা স্পষ্ট বড় ব্যানার
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
@@ -337,7 +335,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // নির্দিষ্ট মাস বেছে নিয়ে চাঁদা গ্রহণ
+  // নির্দিষ্ট মাস ও বছর বেছে নিয়ে চাঁদা গ্রহণ
   void _collectMonthlyDialog(Map<String, dynamic> member) {
     int selectedYear = _curYear;
     int selectedMonth = _curMonth;
@@ -508,7 +506,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ইন-অ্যাপ খাঁটি বাংলা ডিজিটাল মেমো (কোনো বক্স আসবে না)
+  // খাঁটি বাংলা ডিজিটাল ক্যাশ মেমো রসিদ (কখনোই কোনো বক্স বক্স আসবে না)
   void _showDigitalReceipt({
     required String name,
     required dynamic phone,
@@ -563,7 +561,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -578,79 +576,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('বন্ধ করুন')),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.teal[800], foregroundColor: Colors.white),
-            icon: const Icon(Icons.print, size: 16),
-            label: const Text('PDF প্রিন্ট'),
+            icon: const Icon(Icons.copy, size: 16),
+            label: const Text('রসিদ কপি / মেসেজ'),
             onPressed: () {
-              Navigator.pop(ctx);
-              _printPdfReceipt(name, phone, amountPaisa, receiptNo, periodText);
+              final receiptText = '''
+🕌 মিয়াপাড়া কেন্দ্রীয় জামে মসজিদ
+-------------------------------
+রসিদ নং: $receiptNo
+তারিখ: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}
+চাঁদাদাতা: $name
+বিবরণ: $periodText
+জমা: ${BanglaHelper.formatTaka(amountPaisa)}
+স্ট্যাটাস: পরিশোধিত
+-------------------------------
+ধন্যবাদ। আপনার দান কবুল হোক।
+''';
+              Clipboard.setData(ClipboardData(text: receiptText));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('রসিদের লেখা কপি হয়েছে! হোয়াটসঅ্যাপে পেস্ট করে পাঠাতে পারেন।')),
+              );
             },
           ),
         ],
       ),
     );
-  }
-
-  // ফিক্সড ও এররমুক্ত PDF রসিদ
-  Future<void> _printPdfReceipt(String name, dynamic phone, int amountPaisa, String receiptNo, String periodText) async {
-    final doc = pw.Document();
-    pw.Font? ttf;
-    try {
-      ttf = await PdfGoogleFonts.notoSansBengaliRegular();
-    } catch (_) {
-      ttf = pw.Font.helvetica();
-    }
-
-    doc.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.a6,
-        build: (pw.Context ctx) {
-          return pw.Container(
-            padding: const pw.EdgeInsets.all(12),
-            decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColors.teal, width: 1.5)),
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.center,
-              children: [
-                pw.Text('মিয়াপাড়া কেন্দ্রীয় জামে মসজিদ', style: pw.TextStyle(font: ttf, fontSize: 13, fontWeight: pw.FontWeight.bold, color: PdfColors.teal)),
-                pw.Text('Miapara Central Jame Mosque', style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey)),
-                pw.Divider(thickness: 0.8),
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('Receipt No: $receiptNo', style: const pw.TextStyle(fontSize: 8)),
-                    pw.Text('Date: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}', style: const pw.TextStyle(fontSize: 8)),
-                  ],
-                ),
-                pw.SizedBox(height: 8),
-                pw.Align(alignment: pw.Alignment.centerLeft, child: pw.Text('Member: $name', style: pw.TextStyle(font: ttf, fontSize: 10, fontWeight: pw.FontWeight.bold))),
-                if (phone != null)
-                  pw.Align(alignment: pw.Alignment.centerLeft, child: pw.Text('Mobile: $phone', style: const pw.TextStyle(fontSize: 8))),
-                pw.SizedBox(height: 8),
-                pw.Container(
-                  padding: const pw.EdgeInsets.all(6),
-                  color: PdfColors.grey200,
-                  child: pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                    children: [
-                      pw.Text('Period: $periodText', style: pw.TextStyle(font: ttf, fontSize: 9)),
-                      pw.Text(BanglaHelper.formatTaka(amountPaisa), style: pw.TextStyle(font: ttf, fontSize: 10, fontWeight: pw.FontWeight.bold)),
-                    ],
-                  ),
-                ),
-                pw.Spacer(),
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('Collector Sign', style: const pw.TextStyle(fontSize: 7)),
-                    pw.Text('President / Cashier', style: const pw.TextStyle(fontSize: 7)),
-                  ],
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-    await Printing.layoutPdf(onLayout: (format) async => doc.save(), name: 'Receipt_$receiptNo.pdf');
   }
 
   void _addMember() {
