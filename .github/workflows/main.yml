@@ -23,24 +23,35 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Setup & Build Project
+      - name: Auto-Detect File and Build APK
         run: |
+          echo "Searching for main.dart..."
+          TARGET_FILE=""
+          if [ -f "$GITHUB_WORKSPACE/main.dart" ]; then
+            TARGET_FILE="$GITHUB_WORKSPACE/main.dart"
+            echo "Found main.dart in root directory"
+          elif [ -f "$GITHUB_WORKSPACE/lib/main.dart" ]; then
+            TARGET_FILE="$GITHUB_WORKSPACE/lib/main.dart"
+            echo "Found main.dart in lib directory"
+          else
+            echo "Error: main.dart file not found!"
+            ls -la "$GITHUB_WORKSPACE"
+            exit 1
+          fi
+
           cd ..
+          rm -rf miapara_project
           flutter create miapara_project --org com.miapara.chanda
           cd miapara_project
-          
-          # শুধুমাত্র নিরাপদ ও দ্রুত প্যাকেজ
+
           flutter pub add sqflite path intl
-          
-          # আমাদের সম্পূর্ণ main.dart ফাইলটি বসানো
-          cp $GITHUB_WORKSPACE/main.dart lib/main.dart
-          
-          # রিলিজ এপিকে তৈরি
+
+          cp "$TARGET_FILE" lib/main.dart
+
           flutter build apk --release --no-tree-shake-icons
-          
-          # এপিকে আউটপুট ফোল্ডারে সরানো
-          mkdir -p $GITHUB_WORKSPACE/output
-          cp build/app/outputs/flutter-apk/app-release.apk $GITHUB_WORKSPACE/output/miapara-chanda.apk
+
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/output/miapara-chanda.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
