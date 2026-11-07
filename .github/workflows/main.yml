@@ -1,53 +1,36 @@
-
-name: Build Miapara Mosque APK
+name: Build APK
 
 on:
-  workflow_dispatch:
   push:
-    paths:
-      - "miapara_chanda_flutter_starter.zip"
-      - ".github/workflows/main.yml"
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.22.x'
+          channel: 'stable'
 
-      - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
-
-      - name: Extract project
-        run: |
-          mkdir app
-          unzip miapara_chanda_flutter_starter.zip -d app
-      - name: Fix intl dependency
-        run: |
-          sed -i 's/intl: \^0\.19\.0/intl: ^0.20.3/' app/pubspec.yaml
-      - name: Create Android platform files
-        run: |
-          cd app
-          flutter create . --platforms=android --project-name miapara_chanda
-
-      - name: Get dependencies
-        run: |
-          cd app
-          flutter pub get
+      - name: Install dependencies
+        run: flutter pub get
 
       - name: Build APK
-        run: |
-          cd app
-          flutter build apk --release
+        run: flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: miapara-mosque-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          name: miapara-chanda-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
