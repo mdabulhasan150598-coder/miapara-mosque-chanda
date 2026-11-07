@@ -1,4 +1,4 @@
-name: Build APK
+name: Build Mosque APK
 
 on:
   push:
@@ -9,7 +9,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repo
+        uses: actions/checkout@v4
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -20,18 +21,29 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.x'
           channel: 'stable'
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build APK
-        run: flutter build apk --release
-
+      - name: Setup & Build Fresh Project
+        run: |
+          cd ..
+          flutter create miapara_project --org com.miapara.chanda
+          cd miapara_project
+          
+          # প্রয়োজনীয় প্যাকেজ যুক্ত করা
+          flutter pub add sqflite path intl
+          
+          # আমাদের তৈরি main.dart ফাইলটি কপি করে বসানো
+          cp $GITHUB_WORKSPACE/main.dart lib/main.dart
+          
+          # রিলিজ এপিকে তৈরি
+          flutter build apk --release --no-tree-shake-icons
+          
+          # এপিকে আউটপুট ফোল্ডারে সরানো
+          mkdir -p $GITHUB_WORKSPACE/output
+          cp build/app/outputs/flutter-apk/app-release.apk $GITHUB_WORKSPACE/output/miapara-chanda.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: miapara-chanda-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: miapara-masjid-chanda-apk
+          path: output/miapara-chanda.apk
