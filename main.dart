@@ -70,7 +70,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _initDBAndLoad() async {
     final dbPath = await getDatabasesPath();
-    final path = p.join(dbPath, 'miapara_chanda_stable.db');
+    final path = p.join(dbPath, 'miapara_chanda_final_db.db');
 
     _db = await openDatabase(
       path,
@@ -113,7 +113,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final mId = m['id'] as int;
       final rate = m['monthly_rate'] as int;
 
-      // চলতি মাসের মোট জমা
       final curRes = await _db!.rawQuery('''
         SELECT COALESCE(SUM(amount), 0) as paid 
         FROM collections 
@@ -122,7 +121,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final curPaid = curRes.first['paid'] as int;
       final curDue = rate > curPaid ? rate - curPaid : 0;
 
-      // কোন মাস পর্যন্ত দেওয়া আছে তা বের করা
       final lastPaidRes = await _db!.rawQuery('''
         SELECT year, month 
         FROM collections 
@@ -155,12 +153,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  // সদস্যের নামের উপর ট্যাপ করলেই তার খাতা ওপেন হবে
   void _openMemberPassbook(Map<String, dynamic> member) async {
     final mId = member['id'] as int;
     final rate = member['rate'] as int;
 
-    // ১২ মাসের পরিশোধ হিস্টোরি
     final yearRes = await _db!.rawQuery('''
       SELECT month, SUM(amount) as total 
       FROM collections 
@@ -173,7 +169,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       monthPaidMap[r['month'] as int] = r['total'] as int;
     }
 
-    // পূর্বের রসিদের তালিকা
     final history = await _db!.query(
       'collections',
       where: 'member_id = ?',
@@ -214,7 +209,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             const SizedBox(height: 10),
 
-            // কোন মাস পর্যন্ত দেওয়া তা স্পষ্ট বড় ব্যানার
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
@@ -238,7 +232,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             const SizedBox(height: 14),
 
-            // চাঁদা আদায়ের ২ অপশন
             Row(
               children: [
                 Expanded(
@@ -271,7 +264,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Text('${BanglaHelper.toBn(_curYear)} সালের ১২ মাসের খাতা:', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
             const SizedBox(height: 8),
 
-            // ১২ মাসের গ্রিড
             Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -335,7 +327,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // নির্দিষ্ট মাস ও বছর বেছে নিয়ে চাঁদা গ্রহণ
   void _collectMonthlyDialog(Map<String, dynamic> member) {
     int selectedYear = _curYear;
     int selectedMonth = _curMonth;
@@ -430,7 +421,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // বাৎসরিক চাঁদা (১২ মাস একসাথে)
   void _collectYearlyDialog(Map<String, dynamic> member) {
     int targetYear = _curYear;
     final rate = member['rate'] as int;
@@ -506,7 +496,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // খাঁটি বাংলা ডিজিটাল ক্যাশ মেমো রসিদ (কখনোই কোনো বক্স বক্স আসবে না)
   void _showDigitalReceipt({
     required String name,
     required dynamic phone,
@@ -739,6 +728,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           itemBuilder: (ctx, idx) {
                             final m = filteredList[idx];
                             final isCurMonthPaid = m['due'] == 0 && m['rate'] > 0;
+                            final curMonthStatus = isCurMonthPaid ? 'পরিশোধিত' : 'বকেয়া ${BanglaHelper.formatTaka(m['due'])}';
+
                             return ListTile(
                               onTap: () => _openMemberPassbook(m),
                               leading: CircleAvatar(
@@ -753,7 +744,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     m['last_paid_text'],
                                     style: TextStyle(color: isCurMonthPaid ? Colors.teal[800] : Colors.orange[900], fontWeight: FontWeight.w600, fontSize: 12),
                                   ),
-                                  Text('মাসিক: ${BanglaHelper.formatTaka(m['rate'])} | চলতি মাস: ${isCurMonthPaid ? "পরিশোধিত" : "বকেয়া ${BanglaHelper.formatTaka(m['due'])}" }', style: const TextStyle(fontSize: 11)),
+                                  Text('মাসিক: ${BanglaHelper.formatTaka(m['rate'])} | চলতি মাস: $curMonthStatus', style: const TextStyle(fontSize: 11)),
                                 ],
                               ),
                               trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
