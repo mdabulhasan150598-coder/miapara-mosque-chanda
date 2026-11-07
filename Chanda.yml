@@ -34,3 +34,4 @@ jobs:
         with:
           name: miapara-chanda-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
