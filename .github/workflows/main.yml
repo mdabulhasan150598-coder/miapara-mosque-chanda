@@ -23,16 +23,16 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Setup & Build Fresh Project
+      - name: Setup & Build Project
         run: |
           cd ..
           flutter create miapara_project --org com.miapara.chanda
           cd miapara_project
           
-          # প্রয়োজনীয় প্যাকেজ যুক্ত করা
-          flutter pub add sqflite path intl
+          # PDF ও প্রিন্টিং সহ প্যাকেজ যুক্ত করা
+          flutter pub add sqflite path intl pdf printing
           
-          # আমাদের তৈরি main.dart ফাইলটি কপি করে বসানো
+          # আমাদের সম্পূর্ণ main.dart ফাইলটি বসানো
           cp $GITHUB_WORKSPACE/main.dart lib/main.dart
           
           # রিলিজ এপিকে তৈরি
