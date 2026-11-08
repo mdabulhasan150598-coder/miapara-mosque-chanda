@@ -1,0 +1,491 @@
+name: Build Miapara Mosque APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create and build app
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter --version
+          cd "$RUNNER_TEMP"
+          rm -rf miapara_project
+          flutter create --org com.miapara.chanda --project-name miapara_chanda miapara_project
+          cd miapara_project
+
+          cat > pubspec.yaml <<'PUBSPEC'
+          name: miapara_chanda
+          description: Miapara Central Jame Mosque monthly contribution manager.
+          publish_to: "none"
+          version: 1.0.0+1
+
+          environment:
+            sdk: ">=3.3.0 <4.0.0"
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            cupertino_icons: ^1.0.8
+            sqflite: ^2.4.2
+            path: ^1.9.1
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^5.0.0
+
+          flutter:
+            uses-material-design: true
+          PUBSPEC
+
+          cat > lib/main.dart <<'DART'
+          import 'package:flutter/material.dart';
+          import 'package:path/path.dart' as p;
+          import 'package:sqflite/sqflite.dart';
+
+          void main() {
+            WidgetsFlutterBinding.ensureInitialized();
+            runApp(const MosqueApp());
+          }
+
+          const mosqueName = 'মিয়াপাড়া কেন্দ্রীয় জামে মসজিদ';
+          const months = [
+            'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল',
+            'মে', 'জুন', 'জুলাই', 'আগস্ট',
+            'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
+          ];
+
+          String bn(String value) {
+            const en = '0123456789';
+            const digits = '০১২৩৪৫৬৭৮৯';
+            for (var i = 0; i < 10; i++) {
+              value = value.replaceAll(en[i], digits[i]);
+            }
+            return value;
+          }
+
+          String money(num value) => '৳${bn(value.round().toString())}';
+
+          class MosqueApp extends StatelessWidget {
+            const MosqueApp({super.key});
+
+            @override
+            Widget build(BuildContext context) => MaterialApp(
+              debugShowCheckedModeBanner: false,
+              title: mosqueName,
+              theme: ThemeData(
+                useMaterial3: true,
+                colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff087f70)),
+                scaffoldBackgroundColor: const Color(0xfff4f7f6),
+                appBarTheme: const AppBarTheme(
+                  backgroundColor: Color(0xff087f70),
+                  foregroundColor: Colors.white,
+                  centerTitle: true,
+                ),
+              ),
+              home: const HomePage(),
+            );
+          }
+
+          class HomePage extends StatefulWidget {
+            const HomePage({super.key});
+
+            @override
+            State<HomePage> createState() => _HomePageState();
+          }
+
+          class _HomePageState extends State<HomePage> {
+            Database? db;
+            bool loading = true;
+            List<Map<String, Object?>> members = [];
+            int year = DateTime.now().year;
+            int month = DateTime.now().month;
+
+            @override
+            void initState() {
+              super.initState();
+              _init();
+            }
+
+            Future<void> _init() async {
+              final root = await getDatabasesPath();
+              db = await openDatabase(
+                p.join(root, 'miapara_mosque.db'),
+                version: 1,
+                onCreate: (database, version) async {
+                  await database.execute('''
+                    CREATE TABLE members(
+                      id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      name TEXT NOT NULL,
+                      phone TEXT NOT NULL DEFAULT '',
+                      rate INTEGER NOT NULL DEFAULT 100
+                    )
+                  ''');
+                  await database.execute('''
+                    CREATE TABLE collections(
+                      id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      member_id INTEGER NOT NULL,
+                      year INTEGER NOT NULL,
+                      month INTEGER NOT NULL,
+                      amount INTEGER NOT NULL,
+                      paid_at TEXT NOT NULL
+                    )
+                  ''');
+                },
+              );
+              await _load();
+            }
+
+            Future<void> _load() async {
+              final database = db;
+              if (database == null) return;
+              final rows = await database.query('members', orderBy: 'name COLLATE NOCASE');
+              if (!mounted) return;
+              setState(() {
+                members = rows;
+                loading = false;
+              });
+            }
+
+            Future<int> _paid(int memberId, int y, int m) async {
+              final result = await db!.rawQuery(
+                'SELECT COALESCE(SUM(amount), 0) AS total FROM collections WHERE member_id=? AND year=? AND month=?',
+                [memberId, y, m],
+              );
+              return (result.first['total'] as num).toInt();
+            }
+
+            Future<int> _monthTotal() async {
+              final result = await db!.rawQuery(
+                'SELECT COALESCE(SUM(amount), 0) AS total FROM collections WHERE year=? AND month=?',
+                [year, month],
+              );
+              return (result.first['total'] as num).toInt();
+            }
+
+            Future<void> _addMember() async {
+              final name = TextEditingController();
+              final phone = TextEditingController();
+              final rate = TextEditingController(text: '100');
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: const Text('নতুন সদস্য যোগ করুন'),
+                  content: SingleChildScrollView(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      TextField(controller: name, decoration: const InputDecoration(labelText: 'সদস্যের নাম')),
+                      TextField(controller: phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'মোবাইল নম্বর (ঐচ্ছিক)')),
+                      TextField(controller: rate, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'মাসিক চাঁদা (টাকা)')),
+                    ]),
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('বাতিল')),
+                    FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('সংরক্ষণ')),
+                  ],
+                ),
+              );
+              final parsedRate = int.tryParse(rate.text.trim());
+              if (ok == true && name.text.trim().isNotEmpty && parsedRate != null && parsedRate >= 0) {
+                await db!.insert('members', {
+                  'name': name.text.trim(),
+                  'phone': phone.text.trim(),
+                  'rate': parsedRate,
+                });
+                await _load();
+              } else if (ok == true && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('সঠিক নাম ও মাসিক চাঁদার পরিমাণ দিন')));
+              }
+              name.dispose();
+              phone.dispose();
+              rate.dispose();
+            }
+
+            Future<void> _collect(Map<String, Object?> member) async {
+              final amount = TextEditingController(text: '${member['rate']}');
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: Text('${member['name']} — চাঁদা জমা'),
+                  content: TextField(
+                    controller: amount,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'জমার পরিমাণ (টাকা)'),
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('বাতিল')),
+                    FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('জমা করুন')),
+                  ],
+                ),
+              );
+              final taka = int.tryParse(amount.text.trim());
+              amount.dispose();
+              if (ok != true) return;
+              if (taka == null || taka <= 0) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('সঠিক টাকার পরিমাণ দিন')));
+                return;
+              }
+              await db!.insert('collections', {
+                'member_id': member['id'],
+                'year': year,
+                'month': month,
+                'amount': taka,
+                'paid_at': DateTime.now().toIso8601String(),
+              });
+              await _load();
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${member['name']} এর ${money(taka)} জমা হয়েছে')));
+            }
+
+            Future<void> _collectYear(Map<String, Object?> member) async {
+              final amount = TextEditingController(text: '${(member['rate'] as int) * 12}');
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: Text('${member['name']} — বার্ষিক চাঁদা'),
+                  content: TextField(
+                    controller: amount,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'মোট জমার পরিমাণ (টাকা)'),
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('বাতিল')),
+                    FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('১২ মাসে জমা')),
+                  ],
+                ),
+              );
+              final taka = int.tryParse(amount.text.trim());
+              amount.dispose();
+              if (ok != true) return;
+              if (taka == null || taka <= 0) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('সঠিক টাকার পরিমাণ দিন')));
+                return;
+              }
+              final base = taka ~/ 12;
+              final remainder = taka % 12;
+              await db!.transaction((txn) async {
+                for (var i = 0; i < 12; i++) {
+                  final monthlyAmount = base + (i < remainder ? 1 : 0);
+                  if (monthlyAmount == 0) continue;
+                  await txn.insert('collections', {
+                    'member_id': member['id'],
+                    'year': year,
+                    'month': i + 1,
+                    'amount': monthlyAmount,
+                    'paid_at': DateTime.now().toIso8601String(),
+                  });
+                }
+              });
+              await _load();
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('বার্ষিক চাঁদা ১২ মাসে যুক্ত হয়েছে')));
+            }
+
+            Future<void> _showDetails(Map<String, Object?> member) async {
+              final rows = await db!.query(
+                'collections',
+                where: 'member_id=? AND year=?',
+                whereArgs: [member['id'], year],
+                orderBy: 'month DESC, id DESC',
+              );
+              if (!mounted) return;
+              await showDialog<void>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: Text('${member['name']} — ${bn('$year')} সালের হিসাব'),
+                  content: SizedBox(
+                    width: double.maxFinite,
+                    child: rows.isEmpty
+                      ? const Text('এই বছরে কোনো জমার তথ্য নেই।')
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: rows.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (_, index) {
+                            final row = rows[index];
+                            final m = row['month'] as int;
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(months[m - 1]),
+                              subtitle: Text('জমার তারিখ: ${row['paid_at'].toString().split('T').first}'),
+                              trailing: Text(money(row['amount'] as int), style: const TextStyle(fontWeight: FontWeight.bold)),
+                            );
+                          },
+                        ),
+                  ),
+                  actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('বন্ধ করুন'))],
+                ),
+              );
+            }
+
+            Widget _summaryCard(String label, int amount, IconData icon) => Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(children: [
+                  Icon(icon, color: const Color(0xff087f70)),
+                  const SizedBox(height: 5),
+                  Text(label, style: const TextStyle(fontSize: 12)),
+                  const SizedBox(height: 3),
+                  Text(money(amount), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                ]),
+              ),
+            );
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('মসজিদের চাঁদা ব্যবস্থাপনা'),
+                  actions: [IconButton(onPressed: _addMember, icon: const Icon(Icons.person_add_alt_1), tooltip: 'সদস্য যোগ')],
+                ),
+                body: loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : Column(children: [
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.all(12),
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(color: const Color(0xff087f70), borderRadius: BorderRadius.circular(18)),
+                        child: Column(children: [
+                          const Text(mosqueName, textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          Text('সদস্য সংখ্যা: ${bn('${members.length}')}', style: const TextStyle(color: Colors.white)),
+                          const SizedBox(height: 12),
+                          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                            IconButton(
+                              onPressed: () => setState(() { month--; if (month < 1) { month = 12; year--; } }),
+                              icon: const Icon(Icons.chevron_left, color: Colors.white),
+                            ),
+                            Text('${months[month - 1]} ${bn('$year')}',
+                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                            IconButton(
+                              onPressed: () => setState(() { month++; if (month > 12) { month = 1; year++; } }),
+                              icon: const Icon(Icons.chevron_right, color: Colors.white),
+                            ),
+                          ]),
+                        ]),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Row(children: [
+                          Expanded(child: _summaryCard('মাসিক ধার্য', members.fold<int>(0, (s, m) => s + (m['rate'] as int),), Icons.flag_outlined)),
+                          const SizedBox(width: 8),
+                          Expanded(child: FutureBuilder<int>(
+                            future: _monthTotal(),
+                            builder: (_, snap) => _summaryCard('মোট জমা', snap.data ?? 0, Icons.payments_outlined),
+                          )),
+                        ]),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: members.isEmpty
+                          ? const Center(child: Text('এখনো কোনো সদস্য যোগ করা হয়নি।\nউপরের + আইকনে চাপ দিয়ে সদস্য যোগ করুন।', textAlign: TextAlign.center))
+                          : ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+                              itemCount: members.length,
+                              itemBuilder: (context, index) {
+                                final member = members[index];
+                                return FutureBuilder<int>(
+                                  future: _paid(member['id'] as int, year, month),
+                                  builder: (context, snapshot) {
+                                    final paid = snapshot.data ?? 0;
+                                    final rate = member['rate'] as int;
+                                    final done = paid >= rate;
+                                    return Card(
+                                      margin: const EdgeInsets.only(bottom: 9),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(12),
+                                        child: Column(children: [
+                                          Row(children: [
+                                            CircleAvatar(
+                                              backgroundColor: const Color(0xffd9eee9),
+                                              child: Text(bn('${index + 1}'), style: const TextStyle(color: Color(0xff087f70))),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text('${member['name']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                                if ((member['phone'] as String).isNotEmpty)
+                                                  Text('${member['phone']}', style: Theme.of(context).textTheme.bodySmall),
+                                                Text('মাসিক: ${money(rate)}  •  জমা: ${money(paid)}'),
+                                              ],
+                                            )),
+                                            Icon(done ? Icons.check_circle : Icons.pending_outlined, color: done ? Colors.green : Colors.orange),
+                                          ]),
+                                          const SizedBox(height: 10),
+                                          Row(children: [
+                                            Expanded(child: OutlinedButton.icon(
+                                              onPressed: () => _showDetails(member),
+                                              icon: const Icon(Icons.menu_book, size: 18),
+                                              label: const Text('হিসাব'),
+                                            )),
+                                            const SizedBox(width: 6),
+                                            Expanded(child: FilledButton.icon(
+                                              onPressed: () => _collect(member),
+                                              icon: const Icon(Icons.add, size: 18),
+                                              label: const Text('জমা'),
+                                            )),
+                                            const SizedBox(width: 6),
+                                            IconButton(
+                                              onPressed: () => _collectYear(member),
+                                              tooltip: 'বার্ষিক জমা',
+                                              icon: const Icon(Icons.calendar_month),
+                                            ),
+                                          ]),
+                                        ]),
+                                      ),
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                      ),
+                    ]),
+                floatingActionButton: FloatingActionButton.extended(
+                  onPressed: _addMember,
+                  icon: const Icon(Icons.person_add),
+                  label: const Text('সদস্য যোগ'),
+                ),
+              );
+            }
+          }
+          DART
+
+          flutter pub get
+          dart format lib/main.dart
+          flutter analyze
+          flutter build apk --release
+
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/output/miapara-chanda.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: miapara-chanda-apk
+          path: output/miapara-chanda.apk
+          if-no-files-found: error
