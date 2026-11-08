@@ -1,774 +1,105 @@
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart' as p;
+void _collectYearlyDialog(Map<String, dynamic> member) {
+  int targetYear = _curYear;
+  final rate = member['rate'] as int;
+  final yearlyTotalTaka = (rate * 12) ~/ 100;
+  final amountCtrl = TextEditingController(
+    text: yearlyTotalTaka.toString(),
+  );
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MiaparaChandaApp());
-}
-
-class BanglaHelper {
-  static const Map<String, String> _bnDigits = {
-    '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
-    '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯',
-  };
-
-  static const List<String> months = [
-    '', 'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন',
-    'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
-  ];
-
-  static String toBn(dynamic n) {
-    if (n == null) return '০';
-    return n.toString().split('').map((c) => _bnDigits[c] ?? c).join('');
-  }
-
-  static String formatTaka(int paisa) {
-    return '৳ ${toBn(paisa ~/ 100)}';
-  }
-}
-
-class MiaparaChandaApp extends StatelessWidget {
-  const MiaparaChandaApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'মিয়াপাড়া কেন্দ্রীয় জামে মসজিদ',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        primarySwatch: Colors.teal,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF4F6F6),
-      ),
-      home: const DashboardScreen(),
-    );
-  }
-}
-
-class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
-
-  @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
-}
-
-class _DashboardScreenState extends State<DashboardScreen> {
-  Database? _db;
-  int _curYear = DateTime.now().year;
-  int _curMonth = DateTime.now().month;
-  List<Map<String, dynamic>> _memberList = [];
-  bool _isLoading = true;
-  String _searchQuery = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _initDBAndLoad();
-  }
-
-  Future<void> _initDBAndLoad() async {
-    final dbPath = await getDatabasesPath();
-    final path = p.join(dbPath, 'miapara_chanda_final_db.db');
-
-    _db = await openDatabase(
-      path,
-      version: 1,
-      onCreate: (db, v) async {
-        await db.execute('''
-          CREATE TABLE members (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            phone TEXT,
-            monthly_rate INTEGER NOT NULL
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE collections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            member_id INTEGER,
-            year INTEGER,
-            month INTEGER,
-            amount INTEGER,
-            receipt_no TEXT,
-            date TEXT,
-            type TEXT,
-            note TEXT
-          )
-        ''');
-      },
-    );
-    _loadData();
-  }
-
-  Future<void> _loadData() async {
-    if (_db == null) return;
-    setState(() => _isLoading = true);
-
-    final members = await _db!.query('members', orderBy: 'name ASC');
-    List<Map<String, dynamic>> data = [];
-
-    for (var m in members) {
-      final mId = m['id'] as int;
-      final rate = m['monthly_rate'] as int;
-
-      final curRes = await _db!.rawQuery('''
-        SELECT COALESCE(SUM(amount), 0) as paid 
-        FROM collections 
-        WHERE member_id = ? AND year = ? AND month = ?
-      ''', [mId, _curYear, _curMonth]);
-      final curPaid = curRes.first['paid'] as int;
-      final curDue = rate > curPaid ? rate - curPaid : 0;
-
-      final lastPaidRes = await _db!.rawQuery('''
-        SELECT year, month 
-        FROM collections 
-        WHERE member_id = ? 
-        ORDER BY year DESC, month DESC 
-        LIMIT 1
-      ''', [mId]);
-
-      String lastPaidText = 'কোন জমা নেই';
-      if (lastPaidRes.isNotEmpty) {
-        final ly = lastPaidRes.first['year'] as int;
-        final lm = lastPaidRes.first['month'] as int;
-        lastPaidText = '${BanglaHelper.months[lm]} ${BanglaHelper.toBn(ly)} পর্যন্ত পরিশোধিত';
-      }
-
-      data.add({
-        'id': mId,
-        'name': m['name'],
-        'phone': m['phone'],
-        'rate': rate,
-        'paid': curPaid,
-        'due': curDue,
-        'last_paid_text': lastPaidText,
-      });
-    }
-
-    setState(() {
-      _memberList = data;
-      _isLoading = false;
-    });
-  }
-
-  void _openMemberPassbook(Map<String, dynamic> member) async {
-    final mId = member['id'] as int;
-    final rate = member['rate'] as int;
-
-    final yearRes = await _db!.rawQuery('''
-      SELECT month, SUM(amount) as total 
-      FROM collections 
-      WHERE member_id = ? AND year = ? 
-      GROUP BY month
-    ''', [mId, _curYear]);
-
-    Map<int, int> monthPaidMap = {};
-    for (var r in yearRes) {
-      monthPaidMap[r['month'] as int] = r['total'] as int;
-    }
-
-    final history = await _db!.query(
-      'collections',
-      where: 'member_id = ?',
-      whereArgs: [mId],
-      orderBy: 'id DESC',
-      limit: 10,
-    );
-
-    if (!mounted) return;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Container(
-        height: MediaQuery.of(context).size.height * 0.88,
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[400], borderRadius: BorderRadius.circular(10))),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(member['name'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    Text('মোবাইল: ${BanglaHelper.toBn(member['phone'] ?? "দেওয়া নেই")}', style: TextStyle(color: Colors.grey[700], fontSize: 13)),
-                    Text('মাসিক চাঁদা: ${BanglaHelper.formatTaka(rate)}', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 13)),
-                  ],
-                ),
-                IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx))
-              ],
-            ),
-            const SizedBox(height: 10),
-
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-              decoration: BoxDecoration(
-                color: Colors.teal.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.teal.shade200),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.verified, color: Colors.teal),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      member['last_paid_text'],
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.teal),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal[800], foregroundColor: Colors.white),
-                    icon: const Icon(Icons.calendar_month, size: 18),
-                    label: const Text('মাস বেছে জমা'),
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _collectMonthlyDialog(member);
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orange[800], foregroundColor: Colors.white),
-                    icon: const Icon(Icons.star, size: 18),
-                    label: const Text('বাৎসরিক চাঁদা (১ বছর)'),
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _collectYearlyDialog(member);
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 24),
-
-            Text('${BanglaHelper.toBn(_curYear)} সালের ১২ মাসের খাতা:', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-            const SizedBox(height: 8),
-
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: List.generate(12, (index) {
-                final m = index + 1;
-                final paid = monthPaidMap[m] ?? 0;
-                final isPaid = paid >= rate;
-                return Container(
-                  width: (MediaQuery.of(context).size.width - 60) / 4,
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  decoration: BoxDecoration(
-                    color: isPaid ? Colors.green.shade100 : (paid > 0 ? Colors.orange.shade100 : Colors.red.shade50),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: isPaid ? Colors.green : (paid > 0 ? Colors.orange : Colors.red.shade200)),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(BanglaHelper.months[m], style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                      Text(isPaid ? 'পরিশোধ' : (paid > 0 ? BanglaHelper.formatTaka(paid) : 'বকেয়া'),
-                        style: TextStyle(fontSize: 10, color: isPaid ? Colors.green[900] : Colors.red[900]),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ),
-
-            const Divider(height: 24),
-            const Text('রসিদ হিস্টোরি:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-            const SizedBox(height: 6),
-
-            Expanded(
-              child: history.isEmpty
-                  ? const Center(child: Text('এখনও কোনো লেনদেন হয়নি'))
-                  : ListView.builder(
-                      itemCount: history.length,
-                      itemBuilder: (c, idx) {
-                        final h = history[idx];
-                        return ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          title: Text('${BanglaHelper.months[h['month'] as int]} ${BanglaHelper.toBn(h['year'])} — ${BanglaHelper.formatTaka(h['amount'] as int)}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text('রসিদ: ${h['receipt_no']} | ${h['date'].toString().substring(0, 10)}'),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.receipt, color: Colors.teal),
-                            onPressed: () => _showDigitalReceipt(
-                              name: member['name'],
-                              phone: member['phone'],
-                              amountPaisa: h['amount'] as int,
-                              receiptNo: h['receipt_no'] as String,
-                              periodText: '${BanglaHelper.months[h['month'] as int]} ${BanglaHelper.toBn(h['year'])}',
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            )
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _collectMonthlyDialog(Map<String, dynamic> member) {
-    int selectedYear = _curYear;
-    int selectedMonth = _curMonth;
-    final rate = member['rate'] as int;
-    final amountCtrl = TextEditingController(text: (rate ~/ 100).toString());
-    final noteCtrl = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDState) => AlertDialog(
-          title: Text('${member['name']} — চাঁদা জমা'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
-                        value: selectedMonth,
-                        decoration: const InputDecoration(labelText: 'মাসের নাম'),
-                        items: List.generate(12, (i) => i + 1).map((m) {
-                          return DropdownMenuItem(value: m, child: Text(BanglaHelper.months[m]));
-                        }).toList(),
-                        onChanged: (val) => setDState(() => selectedMonth = val!),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
-                        value: selectedYear,
-                        decoration: const InputDecoration(labelText: 'সাল'),
-                        items: [_curYear - 1, _curYear, _curYear + 1].map((y) {
-                          return DropdownMenuItem(value: y, child: Text(BanglaHelper.toBn(y)));
-                        }).toList(),
-                        onChanged: (val) => setDState(() => selectedYear = val!),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: amountCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'টাকার পরিমাণ', border: OutlineInputBorder()),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: noteCtrl,
-                  decoration: const InputDecoration(labelText: 'মন্তব্য (ঐচ্ছিক)'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('বাতিল')),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal[800], foregroundColor: Colors.white),
-              onPressed: () async {
-                final amountTaka = int.tryParse(amountCtrl.text) ?? 0;
-                if (amountTaka <= 0) return;
-                final rNo = 'RCP-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
-
-                await _db!.insert('collections', {
-                  'member_id': member['id'],
-                  'year': selectedYear,
-                  'month': selectedMonth,
-                  'amount': amountTaka * 100,
-                  'receipt_no': rNo,
-                  'date': DateTime.now().toIso8601String(),
-                  'type': 'MONTHLY',
-                  'note': noteCtrl.text.trim(),
-                });
-
-                Navigator.pop(ctx);
-                _loadData();
-
-                _showDigitalReceipt(
-                  name: member['name'],
-                  phone: member['phone'],
-                  amountPaisa: amountTaka * 100,
-                  receiptNo: rNo,
-                  periodText: '${BanglaHelper.months[selectedMonth]} ${BanglaHelper.toBn(selectedYear)}',
-                );
-              },
-              child: const Text('জমা ও রসিদ'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _collectYearlyDialog(Map<String, dynamic> member) {
-    int targetYear = _curYear;
-    final rate = member['rate'] as int;
-    final yearlyTotalTaka = (rate * 12) ~/ 100;
-    final amountCtrl = TextEditingController(text: yearlyTotalTaka.toString());
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDState) => AlertDialog(
-          title: Text('${member['name']} — বাৎসরিক চাঁদা'),
-          content: Column(
+  showDialog(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setDState) => AlertDialog(
+        title: Text('${member['name']} — বাৎসরিক চাঁদা'),
+        content: SingleChildScrollView(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('নির্ধারিত মাসিক চাঁদা: ${BanglaHelper.formatTaka(rate)}'),
-              Text('পুরো ১২ মাসের চাঁদা: ৳ ${BanglaHelper.toBn(yearlyTotalTaka)}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+              Text('মাসিক চাঁদা: ${BanglaHelper.formatTaka(rate)}'),
+              Text('১২ মাসের চাঁদা: ৳ ${BanglaHelper.toBn(yearlyTotalTaka)}'),
               const SizedBox(height: 12),
               DropdownButtonFormField<int>(
                 value: targetYear,
-                decoration: const InputDecoration(labelText: 'কোন সালের চাঁদা'),
-                items: [_curYear, _curYear + 1, _curYear - 1].map((y) {
-                  return DropdownMenuItem(value: y, child: Text('${BanglaHelper.toBn(y)} সাল (১২ মাস)'));
-                }).toList(),
-                onChanged: (val) => setDState(() => targetYear = val!),
+                decoration: const InputDecoration(
+                  labelText: 'কোন সালের চাঁদা',
+                ),
+                items: [_curYear - 1, _curYear, _curYear + 1]
+                    .map((y) => DropdownMenuItem(
+                          value: y,
+                          child: Text(BanglaHelper.toBn(y)),
+                        ))
+                    .toList(),
+                onChanged: (val) {
+                  if (val != null) {
+                    setDState(() => targetYear = val);
+                  }
+                },
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: amountCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'গৃহীত টাকার পরিমাণ', border: OutlineInputBorder()),
+                decoration: const InputDecoration(
+                  labelText: 'গৃহীত টাকার পরিমাণ',
+                  border: OutlineInputBorder(),
+                ),
               ),
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('বাতিল')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('বাতিল'),
+          ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange[800], foregroundColor: Colors.white),
             onPressed: () async {
               final totalTaka = int.tryParse(amountCtrl.text) ?? 0;
               if (totalTaka <= 0) return;
-              final rNo = 'Y-RCP-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
-              final monthlySharePaisa = (totalTaka * 100) ~/ 12;
 
-              for (int m = 1; m <= 12; m++) {
-                await _db!.insert('collections', {
-                  'member_id': member['id'],
-                  'year': targetYear,
-                  'month': m,
-                  'amount': monthlySharePaisa,
-                  'receipt_no': rNo,
-                  'date': DateTime.now().toIso8601String(),
-                  'type': 'YEARLY',
-                  'note': 'বাৎসরিক এককালীন চাঁদা',
-                });
-              }
+              final totalPaisa = totalTaka * 100;
+              final basePaisa = totalPaisa ~/ 12;
+              final remainder = totalPaisa % 12;
+
+              final rNo =
+                  'Y-RCP-${DateTime.now().millisecondsSinceEpoch}';
+              final now = DateTime.now().toIso8601String();
+
+              await _db!.transaction((txn) async {
+                for (int m = 1; m <= 12; m++) {
+                  await txn.insert('collections', {
+                    'member_id': member['id'],
+                    'year': targetYear,
+                    'month': m,
+                    'amount': basePaisa + (m <= remainder ? 1 : 0),
+                    'receipt_no': rNo,
+                    'date': now,
+                    'type': 'YEARLY',
+                    'note': 'বাৎসরিক এককালীন চাঁদা',
+                  });
+                }
+              });
+
+              if (!ctx.mounted) return;
 
               Navigator.pop(ctx);
-              _loadData();
+              await _loadData();
+
+              if (!mounted) return;
 
               _showDigitalReceipt(
                 name: member['name'],
                 phone: member['phone'],
-                amountPaisa: totalTaka * 100,
+                amountPaisa: totalPaisa,
                 receiptNo: rNo,
-                periodText: '${BanglaHelper.toBn(targetYear)} সালের পুরো বছর (১২ মাস)',
+                periodText:
+                    '${BanglaHelper.toBn(targetYear)} সালের পুরো বছর (১২ মাস)',
               );
             },
             child: const Text('১ বছরের চাঁদা জমা নিন'),
           ),
         ],
       ),
-    );
-  }
-
-  void _showDigitalReceipt({
-    required String name,
-    required dynamic phone,
-    required int amountPaisa,
-    required String receiptNo,
-    required String periodText,
-  }) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        contentPadding: EdgeInsets.zero,
-        content: Container(
-          width: 340,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.teal, width: 2),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('মিয়াপাড়া কেন্দ্রীয় জামে মসজিদ', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.teal)),
-              const Text('চাঁদা আদায় ডিজিটাল মেমো', style: TextStyle(fontSize: 11, color: Colors.grey)),
-              const Divider(thickness: 1),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('রসিদ: $receiptNo', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                  Text('তারিখ: ${BanglaHelper.toBn(DateTime.now().day)}/${BanglaHelper.toBn(DateTime.now().month)}/${BanglaHelper.toBn(DateTime.now().year)}', style: const TextStyle(fontSize: 11)),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text('চাঁদাদাতা: $name', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-              ),
-              if (phone != null && phone.toString().isNotEmpty)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('মোবাইল: ${BanglaHelper.toBn(phone)}', style: const TextStyle(fontSize: 11)),
-                ),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(8),
-                color: Colors.teal.shade50,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('বিবরণ: $periodText', style: const TextStyle(fontSize: 12)),
-                    Text(BanglaHelper.formatTaka(amountPaisa), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.teal)),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(children: [Container(width: 60, height: 1, color: Colors.black), const SizedBox(height: 2), const Text('আদায়কারী', style: TextStyle(fontSize: 9))]),
-                  Column(children: [Container(width: 60, height: 1, color: Colors.black), const SizedBox(height: 2), const Text('মুহতামিম / সভাপতি', style: TextStyle(fontSize: 9))]),
-                ],
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('বন্ধ করুন')),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal[800], foregroundColor: Colors.white),
-            icon: const Icon(Icons.copy, size: 16),
-            label: const Text('রসিদ কপি / মেসেজ'),
-            onPressed: () {
-              final receiptText = '''
-🕌 মিয়াপাড়া কেন্দ্রীয় জামে মসজিদ
--------------------------------
-রসিদ নং: $receiptNo
-তারিখ: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}
-চাঁদাদাতা: $name
-বিবরণ: $periodText
-জমা: ${BanglaHelper.formatTaka(amountPaisa)}
-স্ট্যাটাস: পরিশোধিত
--------------------------------
-ধন্যবাদ। আপনার দান কবুল হোক।
-''';
-              Clipboard.setData(ClipboardData(text: receiptText));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('রসিদের লেখা কপি হয়েছে! হোয়াটসঅ্যাপে পেস্ট করে পাঠাতে পারেন।')),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _addMember() {
-    final nameCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final rateCtrl = TextEditingController(text: '200');
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('নতুন সদস্য যোগ'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'সদস্যের নাম (বাধ্যতামূলক)')),
-            TextField(controller: phoneCtrl, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'মোবাইল নম্বর')),
-            TextField(controller: rateCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'মাসিক চাঁদা (টাকা)')),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('বাতিল')),
-          ElevatedButton(
-            onPressed: () async {
-              if (nameCtrl.text.trim().isEmpty) return;
-              final rate = (int.tryParse(rateCtrl.text) ?? 200) * 100;
-              await _db!.insert('members', {
-                'name': nameCtrl.text.trim(),
-                'phone': phoneCtrl.text.trim(),
-                'monthly_rate': rate,
-              });
-              Navigator.pop(ctx);
-              _loadData();
-            },
-            child: const Text('সংরক্ষণ'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    int totalRate = _memberList.fold(0, (s, i) => s + (i['rate'] as int));
-    int totalPaid = _memberList.fold(0, (s, i) => s + (i['paid'] as int));
-    int totalDue = _memberList.fold(0, (s, i) => s + (i['due'] as int));
-
-    final filteredList = _memberList.where((m) {
-      final name = m['name'].toString().toLowerCase();
-      final phone = (m['phone'] ?? '').toString();
-      return name.contains(_searchQuery.toLowerCase()) || phone.contains(_searchQuery);
-    }).toList();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('মিয়াপাড়া কেন্দ্রীয় জামে মসজিদ', style: TextStyle(fontSize: 17, color: Colors.white)),
-        backgroundColor: Colors.teal[800],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addMember,
-        backgroundColor: Colors.teal[800],
-        icon: const Icon(Icons.person_add, color: Colors.white),
-        label: const Text('নতুন সদস্য', style: TextStyle(color: Colors.white)),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: TextField(
-                    decoration: InputDecoration(
-                      hintText: 'নাম বা মোবাইল নম্বর দিয়ে খুঁজুন...',
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    onChanged: (val) => setState(() => _searchQuery = val),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                  color: Colors.teal.shade50,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        '${BanglaHelper.months[_curMonth]} ${BanglaHelper.toBn(_curYear)}',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.arrow_back, size: 20),
-                            onPressed: () {
-                              setState(() {
-                                if (_curMonth == 1) { _curMonth = 12; _curYear--; }
-                                else { _curMonth--; }
-                              });
-                              _loadData();
-                            },
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.arrow_forward, size: 20),
-                            onPressed: () {
-                              setState(() {
-                                if (_curMonth == 12) { _curMonth = 1; _curYear++; }
-                                else { _curMonth++; }
-                              });
-                              _loadData();
-                            },
-                          ),
-                        ],
-                      )
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Row(
-                    children: [
-                      _card('ধার্য', BanglaHelper.formatTaka(totalRate), Colors.blueGrey),
-                      const SizedBox(width: 6),
-                      _card('আদায়', BanglaHelper.formatTaka(totalPaid), Colors.teal),
-                      const SizedBox(width: 6),
-                      _card('বকেয়া', BanglaHelper.formatTaka(totalDue), Colors.redAccent),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: filteredList.isEmpty
-                      ? const Center(child: Text('কোন সদস্য পাওয়া যায়নি'))
-                      : ListView.separated(
-                          itemCount: filteredList.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (ctx, idx) {
-                            final m = filteredList[idx];
-                            final isCurMonthPaid = m['due'] == 0 && m['rate'] > 0;
-                            final curMonthStatus = isCurMonthPaid ? 'পরিশোধিত' : 'বকেয়া ${BanglaHelper.formatTaka(m['due'])}';
-
-                            return ListTile(
-                              onTap: () => _openMemberPassbook(m),
-                              leading: CircleAvatar(
-                                backgroundColor: isCurMonthPaid ? Colors.teal.shade100 : Colors.red.shade100,
-                                child: Icon(isCurMonthPaid ? Icons.check : Icons.person, color: isCurMonthPaid ? Colors.teal : Colors.red),
-                              ),
-                              title: Text(m['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    m['last_paid_text'],
-                                    style: TextStyle(color: isCurMonthPaid ? Colors.teal[800] : Colors.orange[900], fontWeight: FontWeight.w600, fontSize: 12),
-                                  ),
-                                  Text('মাসিক: ${BanglaHelper.formatTaka(m['rate'])} | চলতি মাস: $curMonthStatus', style: const TextStyle(fontSize: 11)),
-                                ],
-                              ),
-                              trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
-                            );
-                          },
-                        ),
-                )
-              ],
-            ),
-    );
-  }
-
-  Widget _card(String t, String v, Color c) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-        child: Column(
-          children: [
-            Text(t, style: TextStyle(fontSize: 11, color: c)),
-            Text(v, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: c)),
-          ],
-        ),
-      ),
-    );
-  }
+    ),
+  );
 }
